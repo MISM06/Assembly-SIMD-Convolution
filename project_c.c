@@ -1,5 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
+#include <dirent.h>
+#include <string.h> 
 
 //پیاده سازی کد های داخل کتابخونه در همین جا
 //بخش پیاده سازی یعنی فعال سازی کد های داخل header
@@ -21,10 +24,6 @@ void convolution_c(float *input, float *output, int width, int height, float *ke
                     sum += input[pixel_index] * kernel[kernel_index];
                 }
             }
-            
-            // مقادیر رنگ باید بین 0 تا 255 باشه
-            if (sum < 0.0) sum = 0.0;
-            if (sum > 255.0) sum = 255.0;
             
             output[i * width + j] = sum;
         }
@@ -59,15 +58,66 @@ int main() {
 
     int width, height, channels;
 
-    //خواندن عکس
-    printf("Loading image...\n");
-    // لود کردن عکس به صورت آرایه ای از پیکسل های سیاه سفید (Grayscale)
-    unsigned char *img = stbi_load("pictures/inputs/pic1.jpg", &width, &height, &channels, 1); 
+    // خواندن لیست عکس‌ها و انتخاب توسط کاربر
+    DIR *d;
+    struct dirent *dir;
+    char filenames[50][256]; // آرایه‌ای برای ذخیره نام حداکثر 50 عکس
+    int file_count = 0;
+
+    printf("\n--- Available Images in 'pictures/inputs/' ---\n");
+    d = opendir("pictures/inputs");
+    
+    if (d) {
+        while ((dir = readdir(d)) != NULL) {
+            // فیلتر کردن فایل‌های مخفی سیستم و پوشه‌های . و ..
+            if (dir->d_name[0] != '.') {
+                strcpy(filenames[file_count], dir->d_name);
+                printf("%d. %s\n", file_count + 1, filenames[file_count]);
+                file_count++;
+            }
+        }
+        closedir(d);
+    } else {
+        printf("Error: Could not open directory 'pictures/inputs/'.\n");
+        return 1;
+    }
+
+    if (file_count == 0) {
+        printf("No images found in the folder!\n");
+        return 0;
+    }
+
+    printf("Select an image (1-%d): ", file_count);
+
+    int img_choice = 0;
+    while (img_choice == 0) {
+        scanf("%d", &img_choice);
+
+        if (img_choice < 1 || img_choice > file_count) {
+            printf("Invalid image choice! Please select a number between 1 and %d.\n", file_count);
+            img_choice = 0; // بازنشانی انتخاب برای تکرار درخواست ورودی
+        }
+    }
+
+
+    // ساختن مسیر کامل فایل ورودی
+    char input_path[512];
+    sprintf(input_path, "pictures/inputs/%s", filenames[img_choice - 1]); // ساختن مسیر کامل فایل ورودی (مثلاً اگر ورودی car.jpg باشه، مسیر میشه pictures/inputs/car.jpg)
+
+    // ساختن مسیر کامل فایل خروجی (مثلاً اگر ورودی car.jpg باشه، خروجی میشه out_car.jpg.png)
+    char output_path[512];
+    sprintf(output_path, "pictures/outputs/out_%s.png", filenames[img_choice - 1]);
+
+    printf("\nLoading %s...\n", input_path);
+    
+    // خواندن عکس به صورت سیاه و سفید (Grayscale)
+    unsigned char *img = stbi_load(input_path, &width, &height, &channels, 1); 
+    
     if (img == NULL) {
         printf("Error: Could not load image!\n");
         return 1;
     }
-    printf("Image loaded! Width: %d, Height: %d\n", width, height);
+    printf("Image \"%s\" loaded! Width: %d, Height: %d\n", filenames[img_choice - 1], width, height);
 
     // تبدیل اعداد صحیح به اعداد اعشاری برای کار با کرنل
     int total_pixels = width * height;
@@ -92,7 +142,12 @@ int main() {
 
 
     // do filters here
-    convolution_c(input_float, output_float, width, height, selected_kernel, 3); // اعمال فیلتر انتخاب شده  
+    clock_t start_c = clock(); // شروع زمان‌سنجی برای تابع
+    convolution_c(input_float, output_float, width, height, selected_kernel, 3); // اعمال فیلتر انتخاب شده
+    clock_t end_c = clock(); // پایان زمان‌سنجی برای تابع
+
+    double time_c = ((double)(end_c - start_c)) / CLOCKS_PER_SEC; // محاسبه زمان صرف شده برای اجرای تابع به ثانیه
+    printf("C function took: %f seconds\n", time_c); 
 
     unsigned char *final_img = (unsigned char *)malloc(total_pixels); // عکس خروجی
     for (int i = 0; i < total_pixels; i++) {
@@ -106,7 +161,8 @@ int main() {
     //ذخیره عکس خروجی
     printf("Saving image...\n");
     // ذخیره عکس به صورت PNG
-    stbi_write_png("pictures/outputs/pic1.png", width, height, 1, final_img, width); // عرض تصویر * تعداد کانال رنگ * سایز هر پیکسل = stride_bytes(گام)
+    stbi_write_png(output_path, width, height, 1, final_img, width);
+     // عرض تصویر * تعداد کانال رنگ * سایز هر پیکسل = stride_bytes(گام)
     // تعریف stride = پرش به خط بعد ممکنه عکست 1920*1080 باشه ولی تو یه بخش 100*100 رو بخوای اینطوری طول و عرض همون 100 عه اما پرش 1920 هست
     printf("Done!\n");
 
