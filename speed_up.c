@@ -11,16 +11,18 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
-void convolution_c(float *input, float *output, int width, int height, float *kernel, int kernel_size) { // kernel size should be odd (e.g., 3 for 3*3)
+extern void apply_convolution_avx(float *input, float *output, int width, int height, float *kernel);
+
+void convolution_c(float *input, float *output, int width, int height, float *kernel) {
     for (int i = 1; i < height - 1; i++) {
         for (int j = 1; j < width - 1; j++) {
             float sum = 0.0;
             
             //اعمال کرنل روی پیکسل (i,j)
-            for (int ki = -(kernel_size / 2); ki <= (kernel_size / 2); ki++) {
-                for (int kj = -(kernel_size / 2); kj <= (kernel_size / 2); kj++) {
+            for (int ki = -1; ki <= 1; ki++) {
+                for (int kj = -1; kj <= 1; kj++) {
                     int pixel_index = (i + ki) * width + (j + kj);
-                    int kernel_index = (ki + kernel_size/2) * kernel_size + (kj + kernel_size/2);
+                    int kernel_index = (ki + 1) * 3 + (kj + 1);
                     sum += input[pixel_index] * kernel[kernel_index];
                 }
             }
@@ -90,13 +92,12 @@ int main() {
     printf("Select an image (1-%d): ", file_count);
 
     int img_choice = 0;
-    while (img_choice == 0) {
-        scanf("%d", &img_choice);
 
-        if (img_choice < 1 || img_choice > file_count) {
-            printf("Invalid image choice! Please select a number between 1 and %d.\n", file_count);
-            img_choice = 0; // بازنشانی انتخاب برای تکرار درخواست ورودی
-        }
+    scanf("%d", &img_choice);
+
+    if (img_choice < 1 || img_choice > file_count) {
+        printf("Invalid image choice!\n");
+        return 1;
     }
 
 
@@ -140,14 +141,38 @@ int main() {
         default: selected_kernel = kernel_edge; printf("Invalid choice! Defaulting to Edge.\n"); break;
     }
 
+    printf("Warming up the cache...\n"); // اجرای اولیه برای پر کردن کش و جلوگیری از تاثیر آن روی تست سرعت
+    convolution_c(input_float, output_float, width, height, selected_kernel);
+    apply_convolution_avx(input_float, output_float, width, height, selected_kernel);
 
-    // do filters here
-    clock_t start_c = clock(); // شروع زمان‌سنجی برای تابع
-    convolution_c(input_float, output_float, width, height, selected_kernel, 3); // اعمال فیلتر انتخاب شده
-    clock_t end_c = clock(); // پایان زمان‌سنجی برای تابع
 
-    double time_c = ((double)(end_c - start_c)) / CLOCKS_PER_SEC; // محاسبه زمان صرف شده برای اجرای تابع به ثانیه
-    printf("C function took: %f seconds\n", time_c); 
+    printf("\nRunning C implementation...\n");
+    clock_t start_c = clock();
+    convolution_c(input_float, output_float, width, height, selected_kernel);
+    clock_t end_c = clock();
+    double time_c = ((double)(end_c - start_c)) / CLOCKS_PER_SEC;
+    printf("⏱️ C version took: %f seconds\n", time_c);
+
+    // ۲. صفر کردن آرایه خروجی (تا تقلب نشه و اسمبلی از صفر شروع کنه)
+    for (int i = 0; i < total_pixels; i++) {
+        output_float[i] = 0.0f;
+    }
+
+    // ۳. تست سرعت اسمبلی (AVX)
+    printf("Running Assembly (AVX) implementation...\n");
+    clock_t start_asm = clock();
+    apply_convolution_avx(input_float, output_float, width, height, selected_kernel);
+    clock_t end_asm = clock();
+    double time_asm = ((double)(end_asm - start_asm)) / CLOCKS_PER_SEC;
+    printf("⏱️ Assembly version took: %f seconds\n", time_asm);
+
+    // ۴. محاسبه ریاضیِ نسبت تسریع
+    if (time_asm > 0) {
+        double speedup = time_c / time_asm;
+        printf("\n🚀 SPEEDUP: Assembly is %.2f times faster than C!\n\n", speedup);
+    } else {
+        printf("\n⚠️ Assembly version time is too small to calculate speedup accurately.\n\n");
+    }
 
     unsigned char *final_img = (unsigned char *)malloc(total_pixels); // عکس خروجی
     for (int i = 0; i < total_pixels; i++) {
