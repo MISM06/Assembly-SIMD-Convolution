@@ -4,3 +4,6 @@ stb_image_write.h
 test.c
 *.jpg
 *.png
+pattern-detection/shape_c
+filter_app
+speed_up
