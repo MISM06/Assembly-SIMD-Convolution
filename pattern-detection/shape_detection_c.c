@@ -281,7 +281,7 @@ double calc_perimeter(int* contour_x, int* contour_y, int contour_len) {
     return perimeter;
 }
 
-void cal_oriented_bbox(int* contour_x, int* contour_y, int contour_len) {
+void cal_oriented_bbox(int* contour_x, int* contour_y, int contour_len, double* best_h, double* best_w, double* sym_score) {
     if (contour_len == 0) return;
 
     //پیدا کردن مرکز ثقل
@@ -308,12 +308,14 @@ void cal_oriented_bbox(int* contour_x, int* contour_y, int contour_len) {
     //بدست آوردن زاویه چرخش بر حسب گرادیان
     double theta = 0.5 * atan2(2.0 * mu11, mu20 - mu02);
     
-    // تبدیل رادیان به درجه (صرفاً برای چاپ و نمایش به کاربر)
-    double angle_degrees = theta * (180.0 / 3.14159265358979323846);
 
     // دوران دادن نقاط خم به اندازه قرینه زاویه چرخش تا طول و عرض واقعی را در حالت افقی حساب کنیم
-    double min_x = 1e9, max_x = -1e9; 
-    double min_y = 1e9, max_y = -1e9;
+    double min_x_rot = 1e9, max_x_rot = -1e9; 
+    double min_y_rot = 1e9, max_y_rot = -1e9;
+
+    //حالت غیر چرخشی هم حساب میکنیم برای حالتایی مثل دایره یا مربع تقریبی که تانژات 0/0 میشود به صورت تئوری اما عملی چرخش 90 درجه میدهد که ابعاد را خراب میکند
+    double min_x_norm = 1e9, max_x_norm = -1e9; 
+    double min_y_norm = 1e9, max_y_norm = -1e9;
 
     double cos_t = cos(-theta);
     double sin_t = sin(-theta);
@@ -331,21 +333,118 @@ void cal_oriented_bbox(int* contour_x, int* contour_y, int contour_len) {
             [ sin(t)   cos(t) ]
         */
 
-        if (rx < min_x) min_x = rx;
-        if (rx > max_x) max_x = rx;
-        if (ry < min_y) min_y = ry;
-        if (ry > max_y) max_y = ry;
+        if (rx < min_x_rot) min_x_rot = rx;
+        if (rx > max_x_rot) max_x_rot = rx;
+        if (ry < min_y_rot) min_y_rot = ry;
+        if (ry > max_y_rot) max_y_rot = ry;
+
+        int x = contour_x[i];
+        int y = contour_y[i];
+        if (x < min_x_norm) min_x_norm = x;
+        if (x > max_x_norm) max_x_norm = x;
+        if (y < min_y_norm) min_y_norm = y;
+        if (y > max_y_norm) max_y_norm = y;
     }
 
-    //محاسبه ابعاد
-    double real_width = max_x - min_x;
-    double real_height = max_y - min_y;
+    double h_rot = max_y_rot - min_y_rot;
+    double w_rot = max_x_rot - min_x_rot;
+    double h_norm = max_y_norm - min_y_norm;
+    double w_norm = max_x_norm - min_x_norm;
 
-    // چاپ نتایج
-    printf("rotration: %.2f degrees\n", angle_degrees);
-    printf("width: %.2f, height: %.2f\n", real_width, real_height);
-    printf("center: (%.2f, %.2f)\n", cx, cy);
+    double area_obb = h_rot * w_rot;
+    double area_bbox = h_norm * w_norm;
+    if (area_obb < area_bbox) {
+        //چرخیده
+        *best_h = h_rot;
+        *best_w = w_rot;
+
+        // محاسبه تقارن برای جعبه چرخیده (در فضای شیفت داده شده مبدأ 0و0 است)
+        double box_cx = (min_x_rot + max_x_rot) / 2.0;
+        double box_cy = (min_y_rot + max_y_rot) / 2.0;
+        double max_dim = (w_rot > h_rot) ? w_rot : h_rot;
+        *sym_score = sqrt(box_cx*box_cx + box_cy*box_cy) / max_dim;
+    } else {
+        //نچرخیده
+        *best_h = h_norm;
+        *best_w = w_norm;
+        // محاسبه تقارن برای جعبه عادی
+        double box_cx = (min_x_norm + max_x_norm) / 2.0;
+        double box_cy = (min_y_norm + max_y_norm) / 2.0;
+        double dx = box_cx - cx;
+        double dy = box_cy - cy;
+        double max_dim = (w_norm > h_norm) ? w_norm : h_norm;
+        *sym_score = sqrt(dx*dx + dy*dy) / max_dim;
+    }
+
+    
+
+    printf("theta: %.1f, cx: %.1f, cy: %.1f, height: %.1f, width: %.1f\n", theta, cx, cy, *best_h, *best_w);
+
 }
+
+void classify_shape(double area, double perimeter, double real_height, double real_width, double symmetry_score) {
+    
+    // اگر مساحت خیلی کوچک بود، شکلی نیست
+    if (area < 20.0) {
+        printf("Shape: Unknown / Noise\n");
+        return;
+    }
+
+    double PI = 3.14159265358979323846;
+
+
+    double obb_area = real_width * real_height;
+    if (obb_area == 0.0) return;
+
+    // شاخص پرشدگی
+    double extent = area / obb_area;
+
+    // شاخص گردی (دایره=1.0 ، مربع=0.78 ، مثلث=0.6)
+    double circularity = (4.0 * PI * area) / (perimeter * perimeter);
+    
+    // نسبت ابعاد (عدد کوچکتر تقسیم بر بزرگتر تا بین 0 و 1 باشه)
+    double min_dim = (real_width < real_height) ? real_width : real_height;
+    double max_dim = (real_width > real_height) ? real_width : real_height;
+    double aspect_ratio = min_dim / max_dim;
+
+
+    // printf("Area: %.1f | Perim: %.1f\n", area, perimeter);
+    // printf("Extent: %.2f | Circ: %.2f | AR: %.2f | Sym: %.2f\n", extent, circularity, aspect_ratio, symmetry_score);
+
+    //دایره و بیضی
+    //گردی بالا
+    if (circularity > 0.84) {
+        if (aspect_ratio > 0.80) {
+            printf("Shape: Circle\n");
+        } else {
+            printf("Shape: Ellipse\n");
+        }
+    }
+    //مربع و مستطیل
+    //extent بالا
+    else if (extent > 0.80) {
+        if (aspect_ratio > 0.80) {
+            printf("Shape: Square\n");
+        } else {
+            printf("Shape: Rectangle\n");
+        }
+    }
+    //لوزی و مثلث
+    // extent حدود 0.5
+    else if (extent > 0.40 && extent < 0.60) {
+        // آستانه تقارنِ اصلاح شده برای هندل کردن مثلث‌های قائم‌الزاویه
+        if (symmetry_score < 0.04) {
+            printf("Shape: Rhombus\n");
+        } else {
+            printf("Shape: Triangle\n");
+        }
+    }
+    //نامعلموم
+    else {
+        printf("Shape: Unknown or Complex Polygon\n");
+    }
+}
+
 int main() {
     
     float sobel_kernel_v[9] = {
@@ -426,19 +525,25 @@ int main() {
                 int contour_length = find_contour(x, y, contour_x, contour_y, final_img, width, height);
                 
                 if (contour_length > 0) {
-                    printf("Found a closed contour with length and start at (%d, %d): %d\n", x, y, contour_length);
-                    for (int i = 0; i < contour_length; i++) {
-                        int idx = contour_y[i] * width + contour_x[i];
-                        output_img[idx * 3 + 0] = 255; // رنگ سفید برای نقاط مرزی (در کانال R)
-                        output_img[idx * 3 + 1] = 0;   // رنگ سیاه برای نقاط مرزی (در کانال G)
-                        output_img[idx * 3 + 2] = 0;   // رنگ سیاه برای نقاط مرزی (در کانال B)
+                    flood_erase(final_img, width, height, x, y);
+                    double area = calc_area(contour_x, contour_y, contour_length);
+                    if (area >= 20.0) {
+                        printf("Found a closed contour with length and start at (%d, %d): %d\n", x, y, contour_length);
+                        for (int i = 0; i < contour_length; i++) {
+                            int idx = contour_y[i] * width + contour_x[i];
+                            output_img[idx * 3 + 0] = 255; // رنگ سفید برای نقاط مرزی (در کانال R)
+                            output_img[idx * 3 + 1] = 0;   // رنگ سیاه برای نقاط مرزی (در کانال G)
+                            output_img[idx * 3 + 2] = 0;   // رنگ سیاه برای نقاط مرزی (در کانال B)
+                
+                        }
                     }
+                    
+                    //پاک کردن نقاط مرزی از تصویر نهایی تا در جستجوی بعدی دوباره پیدا نشوند
+                    double perimeter = calc_perimeter(contour_x, contour_y, contour_length);
+                    double best_h, best_w, sym_score;
+                    cal_oriented_bbox(contour_x, contour_y, contour_length, &best_h, &best_w, &sym_score);
+                    classify_shape(area, perimeter, best_h, best_w, sym_score);
                 }
-                //پاک کردن نقاط مرزی از تصویر نهایی تا در جستجوی بعدی دوباره پیدا نشوند
-                flood_erase(final_img, width, height, x, y);
-                printf("Area: %f\n", calc_area(contour_x, contour_y, contour_length));
-                printf("Perimeter: %f\n", calc_perimeter(contour_x, contour_y, contour_length));
-                cal_oriented_bbox(contour_x, contour_y, contour_length);
             }
         }
     }
