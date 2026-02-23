@@ -3,7 +3,6 @@
 #include <time.h>
 #include <dirent.h>
 #include <string.h> 
-#include <math.h>
 
 //پیاده سازی کد های داخل کتابخونه در همین جا
 //بخش پیاده سازی یعنی فعال سازی کد های داخل header
@@ -253,99 +252,6 @@ void flood_erase(unsigned char* img, int width, int height, int start_x, int sta
     free(stack_y);
 }
 
-double calc_area(int* contour_x, int* contour_y, int contour_len) {
-    // محاسبه مساحت داخل خم بسته با استفاده از فرمول شانون (Shoelace formula)
-    double area = 0.0;
-    for (int i = 0; i < contour_len; i++) {
-        int j = (i + 1) % contour_len; // اندیس بعدی (با حلقه زدن)
-        area += contour_x[i] * contour_y[j] - contour_x[j] * contour_y[i];
-    }
-    return fabs(area) / 2.0; // مساحت مثبت است
-}
-
-double calc_perimeter(int* contour_x, int* contour_y, int contour_len) {
-    // محاسبه محیط خم بسته با جمع کردن فاصله بین نقاط متوالی
-    double rad2 = sqrt(2.0); // فاصله بین نقاط مورب
-    double perimeter = 0.0;
-    for (int i = 0; i < contour_len; i++) {
-        int j = (i + 1) % contour_len; // اندیس بعدی (با حلقه زدن)
-        double dx = contour_x[j] - contour_x[i];
-        double dy = contour_y[j] - contour_y[i];
-        // perimeter += sqrt(dx * dx + dy * dy);
-        if (dx == 0 || dy == 0) {
-            perimeter += 1.0; // اگر حرکت مستقیم باشد، فاصله 1 است
-        } else {
-            perimeter += rad2; // اگر حرکت مورب باشد، فاصله sqrt(2) است
-        }
-    }
-    return perimeter;
-}
-
-void cal_oriented_bbox(int* contour_x, int* contour_y, int contour_len) {
-    if (contour_len == 0) return;
-
-    //پیدا کردن مرکز ثقل
-    double cx = 0, cy = 0;
-    for (int i = 0; i < contour_len; i++) {
-        cx += contour_x[i];
-        cy += contour_y[i];
-    }
-    cx /= contour_len;
-    cy /= contour_len;
-
-    // محاسبه گشتاور های مرکزی برای محاسبه زاویه چرخش
-    double mu20 = 0, mu02 = 0, mu11 = 0;
-    for (int i = 0; i < contour_len; i++) {
-        double dx = contour_x[i] - cx;
-        double dy = contour_y[i] - cy;
-        
-        // Var(X), Var(Y), Cov(X,Y) 
-        mu20 += dx * dx;       
-        mu02 += dy * dy;       
-        mu11 += dx * dy;       
-    }
-
-    //بدست آوردن زاویه چرخش بر حسب گرادیان
-    double theta = 0.5 * atan2(2.0 * mu11, mu20 - mu02);
-    
-    // تبدیل رادیان به درجه (صرفاً برای چاپ و نمایش به کاربر)
-    double angle_degrees = theta * (180.0 / 3.14159265358979323846);
-
-    // دوران دادن نقاط خم به اندازه قرینه زاویه چرخش تا طول و عرض واقعی را در حالت افقی حساب کنیم
-    double min_x = 1e9, max_x = -1e9; 
-    double min_y = 1e9, max_y = -1e9;
-
-    double cos_t = cos(-theta);
-    double sin_t = sin(-theta);
-
-    for (int i = 0; i < contour_len; i++) {
-        // انتقال نقطه به مرکز (مبدأ مختصات)
-        double dx = contour_x[i] - cx;
-        double dy = contour_y[i] - cy;
-
-        // ضرب در ماتریس دوران
-        double rx = dx * cos_t - dy * sin_t;
-        double ry = dx * sin_t + dy * cos_t;
-        /*
-            [ cos(t)  -sin(t) ]
-            [ sin(t)   cos(t) ]
-        */
-
-        if (rx < min_x) min_x = rx;
-        if (rx > max_x) max_x = rx;
-        if (ry < min_y) min_y = ry;
-        if (ry > max_y) max_y = ry;
-    }
-
-    //محاسبه ابعاد
-    double real_width = max_x - min_x;
-    double real_height = max_y - min_y;
-
-    // چاپ نتایج
-    printf("rotration: %.2f degrees\n", angle_degrees);
-    printf("width: %.2f, height: %.2f\n", real_width, real_height);
-    printf("center: (%.2f, %.2f)\n", cx, cy);
-}
 int main() {
     
     float sobel_kernel_v[9] = {
@@ -387,9 +293,6 @@ int main() {
         temp1[i] = 0;
         temp2[i] = 0;
         final_img[i] = 0;
-        output_img[i * 3 + 0] = 0; 
-        output_img[i * 3 + 1] = 0; 
-        output_img[i * 3 + 2] = 0; 
     }
 
     clock_t start_c = clock();
@@ -399,7 +302,6 @@ int main() {
         sobel_result[i] = sqrtf(result_v[i] * result_v[i] + result_h[i] * result_h[i]); // ترکیب لبه‌های عمودی و افقی
     }
 
-    // آستانه‌گذاری برای حذف نویزهای ضعیف و قفل کردن مقادیر بالاتر از 255
     for (int i = 0; i < total_pixels; i++) {
         float val = sobel_result[i];
         if (val > 255.0f) val = 255.0f; // اگر خروجی از 255 بیشتر شد روی 255 قفل بشه
@@ -436,9 +338,6 @@ int main() {
                 }
                 //پاک کردن نقاط مرزی از تصویر نهایی تا در جستجوی بعدی دوباره پیدا نشوند
                 flood_erase(final_img, width, height, x, y);
-                printf("Area: %f\n", calc_area(contour_x, contour_y, contour_length));
-                printf("Perimeter: %f\n", calc_perimeter(contour_x, contour_y, contour_length));
-                cal_oriented_bbox(contour_x, contour_y, contour_length);
             }
         }
     }
@@ -452,13 +351,11 @@ int main() {
     printf("Saving image...\n");
     // ذخیره عکس به صورت PNG
     stbi_write_png(output_path, width, height, 3, output_img, width * 3);
-    // عرض تصویر * تعداد کانال رنگ * سایز هر پیکسل = stride_bytes(گام)
-    // تعریف stride = پرش به خط بعد ممکنه عکست 1920*1080 باشه ولی تو یه بخش 100*100 رو بخوای اینطوری طول و عرض همون 100 عه اما پرش 1920 هست
-
     // char *output_path_2 = (char *)malloc(600 * sizeof(char));
     // sprintf(output_path_2, "%s_org.png", output_path);
     // stbi_write_png(output_path_2, width, height, 1, final_img, width);
-
+    // عرض تصویر * تعداد کانال رنگ * سایز هر پیکسل = stride_bytes(گام)
+    // تعریف stride = پرش به خط بعد ممکنه عکست 1920*1080 باشه ولی تو یه بخش 100*100 رو بخوای اینطوری طول و عرض همون 100 عه اما پرش 1920 هست
     printf("Done!\n");
 
     //آزاد سازی حافظه
