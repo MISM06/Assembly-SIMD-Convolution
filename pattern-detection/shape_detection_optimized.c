@@ -12,6 +12,12 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
+// فراخوانی تابع اسمبلی ما
+extern void apply_convolution_avx(float *input, float *output, int width, int height, float *kernel);
+extern void sobel_magnitude_asm(float* res_v, float* res_h, unsigned char* out_img, int total_pixels);
+extern void erosion_asm(unsigned char* src, unsigned char* dst, int width, int height);
+extern void dilation_asm(unsigned char* src, unsigned char* dst, int width, int height);
+
 int load_img(char* output_path, int* w, int* h, int* c, unsigned char** img) {
     int width, height, channels;
 
@@ -492,32 +498,39 @@ int main() {
     }
 
     clock_t start_c = clock();
-    convolution_c(input_float, result_v, width, height, sobel_kernel_v); // محاسبه لبه‌های عمودی
-    convolution_c(input_float, result_h, width, height, sobel_kernel_h); // محاسبه لبه‌های افقی
-    for (int i = 0; i < total_pixels; i++) {
-        sobel_result[i] = sqrtf(result_v[i] * result_v[i] + result_h[i] * result_h[i]); // ترکیب لبه‌های عمودی و افقی
-    }
+    // convolution_c(input_float, result_v, width, height, sobel_kernel_v); // محاسبه لبه‌های عمودی
+    // convolution_c(input_float, result_h, width, height, sobel_kernel_h); // محاسبه لبه‌های افقی
+    apply_convolution_avx(input_float, result_v, width, height, sobel_kernel_v); // محاسبه لبه‌های عمودی با استفاده از تابع اسمبلی برای بهینه‌سازی
+    apply_convolution_avx(input_float, result_h, width, height, sobel_kernel_h); // محاسبه لبه‌های افقی با استفاده از تابع اسمبلی برای بهینه‌
+    // for (int i = 0; i < total_pixels; i++) {
+    //     sobel_result[i] = sqrtf(result_v[i] * result_v[i] + result_h[i] * result_h[i]); // ترکیب لبه‌های عمودی و افقی
+    // }
 
-    // آستانه‌گذاری برای حذف نویزهای ضعیف و قفل کردن مقادیر بالاتر از 255
-    for (int i = 0; i < total_pixels; i++) {
-        float val = sobel_result[i];
-        if (val > 255.0f) val = 255.0f; // اگر خروجی از 255 بیشتر شد روی 255 قفل بشه
-        if (val < 50.0) val = 0.0f; // اگر مقدار لبه ضعیف بود (کمتر از 50) اون رو صفر کنیم تا نویز حذف بشه
+    // // آستانه‌گذاری برای حذف نویزهای ضعیف و قفل کردن مقادیر بالاتر از 255
+    // for (int i = 0; i < total_pixels; i++) {
+    //     float val = sobel_result[i];
+    //     if (val > 255.0f) val = 255.0f; // اگر خروجی از 255 بیشتر شد روی 255 قفل بشه
+    //     if (val < 128.0) val = 0.0f; // اگر مقدار لبه ضعیف بود (کمتر از 100) اون رو صفر کنیم تا نویز حذف بشه
         
-        temp1[i] = (unsigned char) val; // تبدیل به عدد صحیح برای ذخیره عکس
-        
-    }
+    //     temp1[i] = (unsigned char) val; // تبدیل به عدد صحیح برای ذخیره عکس
+    // }
+    sobel_magnitude_asm(result_v, result_h, temp1, total_pixels); // محاسبه قدر لبه‌ها با استفاده از تابع اسمبلی برای بهینه‌سازی
 
     // closing (بستن شکاف ها) : dilation -> erosion
-    morphology(temp1, temp2, width, height, 1); // گسترش
-    morphology(temp2, final_img, width, height, 0); // سایش
+    // morphology(temp1, final_img, width, height, 1); // گسترش
+    // morphology(temp2, final_img, width, height, 0); // سایش
+    dilation_asm(temp1, temp2, width, height);
+    erosion_asm(temp2, final_img, width, height);
+
     
-    for (int i = 0; i < total_pixels; i++) {
-        output_img[i * 3 + 0] = temp1[i]; // کانال R
-        output_img[i * 3 + 2] = temp1[i]; // کانال B
-        output_img[i * 3 + 1] = temp1[i]; // کانال G
-    }
+    
+    // for (int i = 0; i < total_pixels; i++) {
+    //     output_img[i * 3 + 0] = final_img[i]; // کانال R
+    //     output_img[i * 3 + 2] = final_img[i]; // کانال B
+    //     output_img[i * 3 + 1] = final_img[i]; // کانال G
+    // }
    
+    
     for (int y = 1; y < height - 1; y++) {
         for (int x = 1; x < width - 1; x++) {
             if (final_img[y * width + x] ) {
@@ -526,7 +539,6 @@ int main() {
                 int contour_length = find_contour(x, y, contour_x, contour_y, final_img, width, height);
                 
                 if (contour_length > 0) {
-                    //پاک کردن نقاط مرزی از تصویر نهایی تا در جستجوی بعدی دوباره پیدا نشوند
                     flood_erase(final_img, width, height, x, y);
                     double area = calc_area(contour_x, contour_y, contour_length);
                     if (area >= 20.0) {
@@ -538,16 +550,18 @@ int main() {
                             output_img[idx * 3 + 2] = 0;   // رنگ سیاه برای نقاط مرزی (در کانال B)
                 
                         }
-                        
-                        double perimeter = calc_perimeter(contour_x, contour_y, contour_length);
-                        double best_h, best_w, sym_score;
-                        cal_oriented_bbox(contour_x, contour_y, contour_length, &best_h, &best_w, &sym_score);
-                        classify_shape(area, perimeter, best_h, best_w, sym_score);
                     }
+                    
+                    //پاک کردن نقاط مرزی از تصویر نهایی تا در جستجوی بعدی دوباره پیدا نشوند
+                    double perimeter = calc_perimeter(contour_x, contour_y, contour_length);
+                    double best_h, best_w, sym_score;
+                    cal_oriented_bbox(contour_x, contour_y, contour_length, &best_h, &best_w, &sym_score);
+                    classify_shape(area, perimeter, best_h, best_w, sym_score);
                 }
             }
         }
     }
+    
 
     clock_t end_c = clock();
 

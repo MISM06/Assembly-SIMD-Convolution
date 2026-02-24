@@ -7,3 +7,5 @@ test.c
 pattern-detection/shape_c
 filter_app
 speed_up
+filter_asm
+pattern-detection/shape_op
