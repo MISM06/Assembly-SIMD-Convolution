@@ -554,7 +554,7 @@ int main() {
     
     int width, height, channels;
 
-    // خواندن لیست عکس‌ها و انتخاب توسط کاربر
+    // خواندن لیست عکس‌ ها
     DIR *d;
     struct dirent *dir;
     char filenames[2000][256]; 

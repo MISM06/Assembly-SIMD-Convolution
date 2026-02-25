@@ -9,3 +9,6 @@ filter_app
 speed_up
 filter_asm
 pattern-detection/shape_op
+number_detection/accuracy
+number_detection/detector
+test.asm
