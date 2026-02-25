@@ -4,6 +4,7 @@
 #include <dirent.h>
 #include <string.h> 
 #include <math.h>
+#include <ctype.h>
 
 //پیاده سازی کد های داخل کتابخونه در همین جا
 //بخش پیاده سازی یعنی فعال سازی کد های داخل header
@@ -17,75 +18,6 @@ extern void apply_convolution_avx(float *input, float *output, int width, int he
 extern void sobel_magnitude_asm(float* res_v, float* res_h, unsigned char* out_img, int total_pixels);
 extern void erosion_asm(unsigned char* src, unsigned char* dst, int width, int height);
 extern void dilation_asm(unsigned char* src, unsigned char* dst, int width, int height);
-
-int load_img(char* output_path, int* w, int* h, int* c, unsigned char** img) {
-    int width, height, channels;
-
-    // خواندن لیست عکس‌ها و انتخاب توسط کاربر
-    DIR *d;
-    struct dirent *dir;
-    char filenames[50][256]; // آرایه‌ای برای ذخیره نام حداکثر 50 عکس
-    int file_count = 0;
-
-    printf("\n--- Available Images in 'pictures/inputs/' ---\n");
-    d = opendir("pictures/inputs");
-    
-    if (d) {
-        while ((dir = readdir(d)) != NULL) {
-            // فیلتر کردن فایل‌های مخفی سیستم و پوشه‌های . و ..
-            if (dir->d_name[0] != '.') {
-                strcpy(filenames[file_count], dir->d_name);
-                printf("%d. %s\n", file_count + 1, filenames[file_count]);
-                file_count++;
-            }
-        }
-        closedir(d);
-    } else {
-        printf("Error: Could not open directory 'pictures/inputs/'.\n");
-        return 0;
-    }
-
-    if (file_count == 0) {
-        printf("No images found in the folder!\n");
-        return 0;
-    }
-
-    printf("Select an image (1-%d): ", file_count);
-
-    int img_choice = 0;
-
-    scanf("%d", &img_choice);
-
-    if (img_choice < 1 || img_choice > file_count) {
-        printf("Invalid image choice!\n");
-        return 0;
-    }
-
-
-    // ساختن مسیر کامل فایل ورودی
-    char input_path[512];
-    sprintf(input_path, "pictures/inputs/%s", filenames[img_choice - 1]); // ساختن مسیر کامل فایل ورودی (مثلاً اگر ورودی car.jpg باشه، مسیر میشه pictures/inputs/car.jpg)
-
-    // ساختن مسیر کامل فایل خروجی (مثلاً اگر ورودی car.jpg باشه، خروجی میشه out_car.jpg.png)
-    sprintf(output_path, "pictures/outputs/out_%s", filenames[img_choice - 1]);
-
-    printf("\nLoading %s...\n", input_path);
-    
-    // خواندن عکس به صورت سیاه و سفید (Grayscale)
-    *img = stbi_load(input_path, &width, &height, &channels, 1); 
-    
-    if (img == NULL) {
-        printf("Error: Could not load image!\n");
-        return 0;
-    }
-    printf("Image \"%s\" loaded! Width: %d, Height: %d\n", filenames[img_choice - 1], width, height);
-
-    *w = width;
-    *h = height;
-    *c = channels;    
-
-    return 1;
-}
 
 int find_contour(int p0_x, int p0_y, int* contour_x, int* contour_y, unsigned char* img, int width, int height) { //طول خم را برمیگرداند، اگر خم بسته بود، در غیر این صورت -1 برمیگرداند(البته همیشه خم بسته حساب میکنه و فقط وقتی نویز باشه -1 میده)
     //پیدا کردن خم بسته
@@ -336,25 +268,21 @@ void calc_oriented_bbox(int* contour_x, int* contour_y, int contour_len, double*
         *sym_score = sqrt(dx*dx + dy*dy) / max_dim;
     }
 
-    
-
-    printf("theta: %.1f, cx: %.1f, cy: %.1f, height: %.1f, width: %.1f\n", theta, cx, cy, *best_h, *best_w);
-
 }
 
-void classify_shape(double area, double perimeter, double real_height, double real_width, double symmetry_score) {
+int classify_shape(double area, double perimeter, double real_height, double real_width, double symmetry_score) {
     
     // اگر مساحت خیلی کوچک بود، شکلی نیست
     if (area < 20.0) {
-        printf("Shape: Unknown / Noise\n");
-        return;
+        // printf("Shape: Unknown / Noise\n");
+        return 0;
     }
 
     double PI = 3.14159265358979323846;
 
 
     double obb_area = real_width * real_height;
-    if (obb_area == 0.0) return;
+    if (obb_area == 0.0) return 0;
 
     // شاخص پرشدگی
     double extent = area / obb_area;
@@ -368,25 +296,26 @@ void classify_shape(double area, double perimeter, double real_height, double re
     double aspect_ratio = min_dim / max_dim;
 
 
-    printf("Area: %.1f | Perim: %.1f\n", area, perimeter);
-    printf("Extent: %.2f | Circ: %.2f | AR: %.2f | Sym: %.2f\n", extent, circularity, aspect_ratio, symmetry_score);
-
     //دایره و بیضی
     //گردی بالا
     if (circularity > 0.84) {
         if (aspect_ratio > 0.80) {
-            printf("Shape: Circle\n");
+            // printf("Shape: Circle\n");
+            return 1;
         } else {
-            printf("Shape: Ellipse\n");
+            // printf("Shape: Ellipse\n");
+            return 2;
         }
     }
     //مربع و مستطیل
     //extent بالا
     else if (extent > 0.80) {
         if (aspect_ratio > 0.80) {
-            printf("Shape: Square\n");
+            // printf("Shape: Square\n");
+            return 3;
         } else {
-            printf("Shape: Rectangle\n");
+            // printf("Shape: Rectangle\n");
+            return 4;
         }
     }
     //لوزی و مثلث
@@ -394,19 +323,21 @@ void classify_shape(double area, double perimeter, double real_height, double re
     else if (extent > 0.40 && extent < 0.60) {
         // آستانه تقارنِ اصلاح شده برای هندل کردن مثلث‌های قائم‌الزاویه
         if (symmetry_score < 0.04) {
-            printf("Shape: Rhombus\n");
+            // printf("Shape: Rhombus\n");
+            return 5;
         } else {
-            printf("Shape: Triangle\n");
+            // printf("Shape: Triangle\n");
+            return 6;
         }
     }
     //نامعلموم
     else {
-        printf("Shape: Unknown or Complex Polygon\n");
+        // printf("Shape: Unknown or Complex Polygon\n");
+        return 0;
     }
 }
 
-int main() {
-    
+int calc_asm(unsigned char* img, int width, int height) {
     float sobel_kernel_v[9] = {
         -1.0f,  0.0f,  1.0f,
         -2.0f,  0.0f,  2.0f,
@@ -417,26 +348,21 @@ int main() {
          0.0f,  0.0f,  0.0f,
          1.0f,  2.0f,  1.0f
     };
-
-    int width, height, channels;
-
-    unsigned char *img = NULL; // اشاره‌گری برای ذخیره عکس ورودی
-    char output_path[512]; // آرایه‌ای برای ذخیره مسیر فایل خروجی
-    if(load_img(output_path, &width, &height, &channels, &img) <= 0){ // بارگذاری عکس و دریافت ابعاد و کانال‌ها    
-        return 0;
-    }
-
+    float kernel_sharpen[9] = {
+         0.0f, -1.0f,  0.0f,
+        -1.0f,  5.0f, -1.0f,
+         0.0f, -1.0f,  0.0f
+    };
     // تبدیل اعداد صحیح به اعداد اعشاری برای کار با کرنل
     int total_pixels = width * height;
     float *input_float = (float *)malloc(total_pixels * sizeof(float));
+    float *sharpned_float = (float *)malloc(total_pixels * sizeof(float));
     float *result_v = (float *)malloc(total_pixels * sizeof(float)); 
     float *result_h = (float *)malloc(total_pixels * sizeof(float)); 
     float *sobel_result = (float *)malloc(total_pixels * sizeof(float)); 
     unsigned char *final_img = (unsigned char *)malloc(total_pixels);
     unsigned char *temp1 = (unsigned char *)malloc(total_pixels);
     unsigned char *temp2 = (unsigned char *)malloc(total_pixels);
-    unsigned char *output_img = (unsigned char *)malloc(total_pixels * 3); // آرایه‌ای برای ذخیره تصویر خروجی رنگی (RGB)
-
 
     for (int i = 0; i < total_pixels; i++) {
         input_float[i] = (float)img[i];
@@ -446,68 +372,42 @@ int main() {
         temp1[i] = 0;
         temp2[i] = 0;
         final_img[i] = 0;
-        output_img[i * 3 + 0] = 0; 
-        output_img[i * 3 + 1] = 0; 
-        output_img[i * 3 + 2] = 0; 
     }
 
-    clock_t start_asm = clock();
-    apply_convolution_avx(input_float, result_v, width, height, sobel_kernel_v); //لبه های عمودی
-    apply_convolution_avx(input_float, result_h, width, height, sobel_kernel_h); //لبه های افقی
+    apply_convolution_avx(input_float, sharpned_float, width, height, kernel_sharpen); // تیز کردن تصویر برای بهتر کردن لبه ها
+    apply_convolution_avx(sharpned_float, result_v, width, height, sobel_kernel_v); //لبه های عمودی
+    apply_convolution_avx(sharpned_float, result_h, width, height, sobel_kernel_h); //لبه های افقی
     sobel_magnitude_asm(result_v, result_h, temp1, total_pixels); //ترکیب لبه ها افقی و عمودی
 
     // closing (بستن شکاف ها) : dilation -> erosion
     dilation_asm(temp1, temp2, width, height);
     erosion_asm(temp2, final_img, width, height);
 
-   
-    
+    int res = 0;
     for (int y = 1; y < height - 1; y++) {
         for (int x = 1; x < width - 1; x++) {
             if (final_img[y * width + x] ) {
                 int contour_x[10000]; // آرایه‌ای برای ذخیره مختصات x نقاط مرزی
                 int contour_y[10000]; // آرایه‌ای برای ذخیره مختصات y نقاط مرزی
                 int contour_length = find_contour(x, y, contour_x, contour_y, final_img, width, height);
-                
-                if (contour_length > 0) {
-                    //پاک کردن نقاط مرزی از تصویر نهایی تا در جستجوی بعدی دوباره پیدا نشوند
-                    flood_erase(final_img, width, height, x, y);
-                    double area = calc_area(contour_x, contour_y, contour_length);
-                    if (area >= 20.0) {
-                        printf("Found a closed contour with length and start at (%d, %d): %d\n", x, y, contour_length);
-                        for (int i = 0; i < contour_length; i++) {
-                            int idx = contour_y[i] * width + contour_x[i];
-                            output_img[idx * 3 + 0] = 255; // کانال R
-                            output_img[idx * 3 + 1] = 0;   // کانال G
-                            output_img[idx * 3 + 2] = 0;   // کانال B
-                
-                        }
-                    }
-                    
-                    double perimeter = calc_perimeter(contour_x, contour_y, contour_length);
-                    double best_h, best_w, sym_score;
-                    calc_oriented_bbox(contour_x, contour_y, contour_length, &best_h, &best_w, &sym_score);
-                    classify_shape(area, perimeter, best_h, best_w, sym_score);
+                if (contour_length <= 0) continue; // اگر خم بسته‌ای پیدا نشد یا فقط یک پیکسل بود، ردش کن
+              
+                //پاک کردن نقاط مرزی از تصویر نهایی تا در جستجوی بعدی دوباره پیدا نشوند
+                flood_erase(final_img, width, height, x, y);
+                double area = calc_area(contour_x, contour_y, contour_length);
+                if (area <= 20.0) continue; // اگر مساحت خیلی کوچک بود، احتمالاً نویز است، ردش کن
+                for (int i = 0; i < contour_length; i++) {
+                    int idx = contour_y[i] * width + contour_x[i];
                 }
+                double perimeter = calc_perimeter(contour_x, contour_y, contour_length);
+                double best_h, best_w, sym_score;
+                calc_oriented_bbox(contour_x, contour_y, contour_length, &best_h, &best_w, &sym_score);
+                res = classify_shape(area, perimeter, best_h, best_w, sym_score);
+                break; // اگر فقط میخوایم اولین شکل رو پیدا کنیم، این break رو بردار تا همه شکل‌ها رو پیدا کنه
             }
         }
     }
     
-
-    clock_t end_asm = clock();
-
-    double token_time = ((double)(end_asm - start_asm)) / CLOCKS_PER_SEC;
-    printf("Token time: %f seconds\n", token_time);
-
-    //ذخیره عکس خروجی
-    printf("Saving image...\n");
-    // ذخیره عکس به صورت PNG
-    stbi_write_png(output_path, width, height, 3, output_img, width * 3);
-    // عرض تصویر * تعداد کانال رنگ * سایز هر پیکسل = stride_bytes(گام)
-    // تعریف stride = پرش به خط بعد ممکنه عکست 1920*1080 باشه ولی تو یه بخش 100*100 رو بخوای اینطوری طول و عرض همون 100 عه اما پرش 1920 هست
-
-    printf("Done!\n");
-
     //آزاد سازی حافظه
     stbi_image_free(img);
     free(input_float);
@@ -517,7 +417,90 @@ int main() {
     free(result_v);
     free(result_h);
     free(sobel_result);
-    free(output_img);
+
+    return res;
+}
+
+int main() {
+    
+    int width, height, channels;
+
+    // خواندن لیست عکس‌ها و انتخاب توسط کاربر
+    DIR *d;
+    struct dirent *dir;
+    char filenames[2000][256]; 
+    int file_count = 0;
+
+    d = opendir("pictures/tests");
+    
+    if (d) {
+        while ((dir = readdir(d)) != NULL) {
+            // فیلتر کردن فایل‌های مخفی سیستم و پوشه‌های . و ..
+            if (dir->d_name[0] != '.') {
+                strcpy(filenames[file_count], dir->d_name);
+                file_count++;
+            }
+        }
+        closedir(d);
+    } else {
+        printf("Error: Could not open directory 'tests'.\n");
+        return 0;
+    }
+
+    if (file_count == 0) {
+        printf("No images found in the folder!\n");
+        return 0;
+    }
+
+
+    int proccesed_images = 0;
+    int correct_detections = 0;
+
+    for (int image_choice = 0; image_choice < file_count; image_choice++) {
+            char input_path[512];
+        sprintf(input_path, "pictures/tests/%s", filenames[image_choice]);
+
+        unsigned char *img = stbi_load(input_path, &width, &height, &channels, 1);
+
+        img = stbi_load(input_path, &width, &height, &channels, 1);
+        if (img == NULL) {
+            printf("Error: Could not load image %s!\n", filenames[image_choice]);
+            continue;
+        }
+
+        ++proccesed_images;
+        int detected_shape = calc_asm(img, width, height);
+        int correct_shape = 0; //unkown or nothing
+        char *name = (char *)malloc(256);
+        strcpy(name, filenames[image_choice]);
+        for (int i = 0; name[i]; i++) {
+            name[i] = tolower(name[i]);
+        }
+        if (strstr(name, "circle")) {
+            correct_shape = 1;
+        } else if (strstr(name, "ellipse")) {
+            correct_shape = 2;
+        } else if (strstr(name, "square")) {
+            correct_shape = 3;
+        } else if (strstr(name, "rectangle")) {
+            correct_shape = 4;
+        } else if (strstr(name, "rhombus")) {
+            correct_shape = 5;
+        } else if (strstr(name, "triangle")) {
+            correct_shape = 6;
+        }
+        if (detected_shape == correct_shape) {
+            correct_detections++;
+        } else {
+            printf("res: %d, %s\n", detected_shape, filenames[image_choice]);
+        }
+        free(name);
+    }
+    printf("\n==================== Accuracy Summary ====================\n");
+    printf("Processed %d images.\n", proccesed_images);
+    printf("Correct Detections: %d\n", correct_detections);
+    double accuracy = (double)correct_detections / proccesed_images * 100;
+    printf("✅ Accuracy: %.2f%%\n", accuracy);
 
     return 0;
 }
