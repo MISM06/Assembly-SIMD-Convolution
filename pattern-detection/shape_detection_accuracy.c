@@ -173,110 +173,133 @@ double calc_perimeter(int* contour_x, int* contour_y, int contour_len) {
     return perimeter;
 }
 
-void calc_oriented_bbox(int* contour_x, int* contour_y, int contour_len, double* best_h, double* best_w, double* sym_score) {
-    if (contour_len == 0) return;
+typedef struct {
+    double x;
+    double y;
+} Point;
 
-    //پیدا کردن مرکز ثقل
+// محاسبه ضرب خارجی (Cross Product) برای تشخیص جهت چرخش
+double cross_product(Point o, Point a, Point b) {
+    return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+}
+
+// تابع مقایسه برای qsort (مرتب سازی برحسب x و سپس y)
+int compare_points(const void* a, const void* b) {
+    Point* p1 = (Point*)a;
+    Point* p2 = (Point*)b;
+    if (p1->x < p2->x) return -1;
+    if (p1->x > p2->x) return 1;
+    if (p1->y < p2->y) return -1;
+    if (p1->y > p2->y) return 1;
+    return 0;
+}
+
+// الگوریتم Monotone Chain برای استخراج Convex Hull
+int convex_hull(Point* points, int n, Point* hull) {
+    if (n <= 3) {
+        for (int i = 0; i < n; i++) hull[i] = points[i];
+        return n;
+    }
+
+    // مرتب‌سازی نقاط
+    qsort(points, n, sizeof(Point), compare_points);
+
+    int k = 0;
+    // ساخت نیمه پایینی پوش محدب
+    for (int i = 0; i < n; ++i) {
+        while (k >= 2 && cross_product(hull[k - 2], hull[k - 1], points[i]) <= 0) k--;
+        hull[k++] = points[i];
+    }
+
+    // ساخت نیمه بالایی پوش محدب
+    for (int i = n - 2, t = k + 1; i >= 0; i--) {
+        while (k >= t && cross_product(hull[k - 2], hull[k - 1], points[i]) <= 0) k--;
+        hull[k++] = points[i];
+    }
+
+    // نقطه آخر تکراری است (همان نقطه اول)، پس یکی کم می‌کنیم
+    return k - 1;
+}
+
+void min_bounding_box(Point* hull, int h, double* out_width, double* out_height, double* bbox_cx, double* bbox_cy) {
+    double min_area = 1e9;
+    double best_w = 0, best_h = 0;
+    double best_cx = 0, best_cy = 0;
+
+    // روی تک‌تک اضلاع پوش محدب حلقه می‌زنیم
+    for (int i = 0; i < h; i++) {
+        int next = (i + 1) % h;
+        double dx = hull[next].x - hull[i].x;
+        double dy = hull[next].y - hull[i].y;
+        double length = sqrt(dx * dx + dy * dy);
+
+        if (length == 0.0) continue;
+
+        // محاسبه بردارهای یکه (مماس و عمود)
+        double ux = dx / length;
+        double uy = dy / length;
+        double vx = -uy;
+        double vy = ux;
+
+        double min_u = 1e9, max_u = -1e9;
+        double min_v = 1e9, max_v = -1e9;
+
+        // تصویر کردن تمام نقاط پوش محدب روی این دو محور
+        for (int j = 0; j < h; j++) {
+            double proj_u = hull[j].x * ux + hull[j].y * uy;
+            double proj_v = hull[j].x * vx + hull[j].y * vy;
+
+            if (proj_u < min_u) min_u = proj_u;
+            if (proj_u > max_u) max_u = proj_u;
+            if (proj_v < min_v) min_v = proj_v;
+            if (proj_v > max_v) max_v = proj_v;
+        }
+
+        // محاسبه طول، عرض و مساحت برای زاویه فعلی
+        double width = max_u - min_u;
+        double height = max_v - min_v;
+        double area = width * height;
+
+        // جواب کمترین مساحت است
+        if (area < min_area) {
+            min_area = area;
+            best_w = width;
+            best_h = height;
+            // مرکز در مختصات جدید
+            double center_u = (min_u + max_u) / 2.0;
+            double center_v = (min_v + max_v) / 2.0;
+
+            // تبدیل مرکز به محور های x , y
+            best_cx = (center_u * ux) + (center_v * vx);
+            best_cy = (center_u * uy) + (center_v * vy);
+        }
+    }
+
+    *out_width = best_w;
+    *out_height = best_h;
+    *bbox_cx = best_cx;
+    *bbox_cy = best_cy;
+}
+
+double calc_sym_score(int* contour_x, int* contour_y, int n, double bbox_cx, double bbox_cy, double best_h, double best_w) {
+
     double cx = 0, cy = 0;
-    for (int i = 0; i < contour_len; i++) {
+    for (int i = 0; i < n; i++) {
         cx += contour_x[i];
         cy += contour_y[i];
     }
-    cx /= contour_len;
-    cy /= contour_len;
+    cx /= n;
+    cy /= n;
 
-    // محاسبه گشتاور های مرکزی برای محاسبه زاویه چرخش
-    double mu20 = 0, mu02 = 0, mu11 = 0;
-    for (int i = 0; i < contour_len; i++) {
-        double dx = contour_x[i] - cx;
-        double dy = contour_y[i] - cy;
-        
-        // Var(X), Var(Y), Cov(X,Y) 
-        mu20 += dx * dx;       
-        mu02 += dy * dy;       
-        mu11 += dx * dy;       
-    }
-
-    //بدست آوردن زاویه چرخش بر حسب گرادیان
-    double theta = 0.5 * atan2(2.0 * mu11, mu20 - mu02);
-    
-
-    // دوران دادن نقاط خم به اندازه قرینه زاویه چرخش تا طول و عرض واقعی را در حالت افقی حساب کنیم
-    double min_x_rot = 1e9, max_x_rot = -1e9; 
-    double min_y_rot = 1e9, max_y_rot = -1e9;
-
-    //حالت غیر چرخشی هم حساب میکنیم برای حالتایی مثل دایره یا مربع تقریبی که تانژات 0/0 میشود به صورت تئوری اما عملی چرخش 90 درجه میدهد که ابعاد را خراب میکند
-    double min_x_norm = 1e9, max_x_norm = -1e9; 
-    double min_y_norm = 1e9, max_y_norm = -1e9;
-
-    double cos_t = cos(-theta);
-    double sin_t = sin(-theta);
-
-    for (int i = 0; i < contour_len; i++) {
-        // انتقال نقطه به مرکز (مبدأ مختصات)
-        double dx = contour_x[i] - cx;
-        double dy = contour_y[i] - cy;
-
-        // ضرب در ماتریس دوران
-        double rx = dx * cos_t - dy * sin_t;
-        double ry = dx * sin_t + dy * cos_t;
-        /*
-            [ cos(t)  -sin(t) ]
-            [ sin(t)   cos(t) ]
-        */
-
-        if (rx < min_x_rot) min_x_rot = rx;
-        if (rx > max_x_rot) max_x_rot = rx;
-        if (ry < min_y_rot) min_y_rot = ry;
-        if (ry > max_y_rot) max_y_rot = ry;
-
-        int x = contour_x[i];
-        int y = contour_y[i];
-        if (x < min_x_norm) min_x_norm = x;
-        if (x > max_x_norm) max_x_norm = x;
-        if (y < min_y_norm) min_y_norm = y;
-        if (y > max_y_norm) max_y_norm = y;
-    }
-
-    double h_rot = max_y_rot - min_y_rot;
-    double w_rot = max_x_rot - min_x_rot;
-    double h_norm = max_y_norm - min_y_norm;
-    double w_norm = max_x_norm - min_x_norm;
-
-    double area_obb = h_rot * w_rot;
-    double area_bbox = h_norm * w_norm;
-    if (area_obb < area_bbox) {
-        //چرخیده
-        *best_h = h_rot;
-        *best_w = w_rot;
-
-        // محاسبه تقارن برای جعبه چرخیده (در فضای شیفت داده شده مبدأ 0و0 است)
-        double box_cx = (min_x_rot + max_x_rot) / 2.0;
-        double box_cy = (min_y_rot + max_y_rot) / 2.0;
-        double max_dim = (w_rot > h_rot) ? w_rot : h_rot;
-        *sym_score = sqrt(box_cx*box_cx + box_cy*box_cy) / max_dim;
-    } else {
-        //نچرخیده
-        *best_h = h_norm;
-        *best_w = w_norm;
-        // محاسبه تقارن برای جعبه عادی
-        double box_cx = (min_x_norm + max_x_norm) / 2.0;
-        double box_cy = (min_y_norm + max_y_norm) / 2.0;
-        double dx = box_cx - cx;
-        double dy = box_cy - cy;
-        double max_dim = (w_norm > h_norm) ? w_norm : h_norm;
-        *sym_score = sqrt(dx*dx + dy*dy) / max_dim;
-    }
-
+    double max_dim = (best_w > best_h) ? best_w : best_h;
+    double dx = bbox_cx - cx;
+    double dy = bbox_cy - cy;
+    return sqrt(dx * dx + dy * dy) / max_dim;
 }
 
 int classify_shape(double area, double perimeter, double real_height, double real_width, double symmetry_score) {
     
     // اگر مساحت خیلی کوچک بود، شکلی نیست
-    if (area < 20.0) {
-        // printf("Shape: Unknown / Noise\n");
-        return 0;
-    }
 
     double PI = 3.14159265358979323846;
 
@@ -296,45 +319,37 @@ int classify_shape(double area, double perimeter, double real_height, double rea
     double aspect_ratio = min_dim / max_dim;
 
 
-    //دایره و بیضی
-    //گردی بالا
-    if (circularity > 0.84) {
+    // printf("Area: %.1f | Perim: %.1f\n", area, perimeter);
+    // printf("Extent: %.2f | Circ: %.2f | AR: %.2f | Sym: %.2f\n", extent, circularity, aspect_ratio, symmetry_score);
+
+    // دایره گردی بالا و ابعاد برابر
+    if (circularity > 0.84 && aspect_ratio > 0.85) {
+        return 1; // Circle
+    }
+    // مربع و مستطیل extent زیاد دارند
+    else if (extent > 0.83) {
         if (aspect_ratio > 0.80) {
-            // printf("Shape: Circle\n");
-            return 1;
+            return 3; // Square
         } else {
-            // printf("Shape: Ellipse\n");
-            return 2;
+            return 4; // Rectangle
         }
     }
-    //مربع و مستطیل
-    //extent بالا
-    else if (extent > 0.80) {
-        if (aspect_ratio > 0.80) {
-            // printf("Shape: Square\n");
-            return 3;
-        } else {
-            // printf("Shape: Rectangle\n");
-            return 4;
-        }
+    
+    else if (extent > 0.44 && extent < 0.56 && symmetry_score >= 0.04) {
+        return 6; // Triangle
     }
-    //لوزی و مثلث
-    // extent حدود 0.5
-    else if (extent > 0.40 && extent < 0.60) {
-        // آستانه تقارنِ اصلاح شده برای هندل کردن مثلث‌های قائم‌الزاویه
-        if (symmetry_score < 0.04) {
-            // printf("Shape: Rhombus\n");
-            return 5;
-        } else {
-            // printf("Shape: Triangle\n");
-            return 6;
-        }
+    // محاسبه گردی تئوری برای یک لوزی با همین نسبت ابعاد
+    double theoretical_rhombus_circ = (PI / 2.0) * aspect_ratio / (1.0 + (aspect_ratio * aspect_ratio));
+
+    // محاسبه گردی تئوری برای یک لوزی با همین نسبت ابعاد
+    if (circularity > theoretical_rhombus_circ + 0.08) {
+        return 2; // Ellipse
+    } 
+    // اگر به عدد تئوری نزدیک بود و متقارن بود، لوزی است
+    else if (symmetry_score < 0.04 && circularity > theoretical_rhombus_circ - 0.15) {
+        return 5; // Rhombus
     }
-    //نامعلموم
-    else {
-        // printf("Shape: Unknown or Complex Polygon\n");
-        return 0;
-    }
+    return 0;
 }
 
 int calc_asm(unsigned char* img, int width, int height) {
@@ -395,14 +410,24 @@ int calc_asm(unsigned char* img, int width, int height) {
                 //پاک کردن نقاط مرزی از تصویر نهایی تا در جستجوی بعدی دوباره پیدا نشوند
                 flood_erase(final_img, width, height, x, y);
                 double area = calc_area(contour_x, contour_y, contour_length);
-                if (area <= 20.0) continue; // اگر مساحت خیلی کوچک بود، احتمالاً نویز است، ردش کن
-                for (int i = 0; i < contour_length; i++) {
-                    int idx = contour_y[i] * width + contour_x[i];
-                }
+                if (area <= 10.0) continue; // اگر مساحت خیلی کوچک بود، احتمالاً نویز است، ردش کن
                 double perimeter = calc_perimeter(contour_x, contour_y, contour_length);
-                double best_h, best_w, sym_score;
-                calc_oriented_bbox(contour_x, contour_y, contour_length, &best_h, &best_w, &sym_score);
+                double best_h, best_w, bbox_cx, bbox_cy, sym_score;
+                
+                Point* points = (Point*)malloc(contour_length * sizeof(Point));
+                for (int i = 0; i < contour_length; i++) {
+                    points[i].x = contour_x[i];
+                    points[i].y = contour_y[i];
+                }
+                Point* hull = (Point*)malloc(2 * contour_length * sizeof(Point));
+                
+                int h_count = convex_hull(points, contour_length, hull);
+                min_bounding_box(hull, h_count, &best_w, &best_h, &bbox_cx, &bbox_cy);
+                sym_score = calc_sym_score(contour_x, contour_y, contour_length, bbox_cx, bbox_cy, best_h, best_w);
                 res = classify_shape(area, perimeter, best_h, best_w, sym_score);
+
+                free(points);
+                free(hull);
                 break; // اگر فقط میخوایم اولین شکل رو پیدا کنیم، این break رو بردار تا همه شکل‌ها رو پیدا کنه
             }
         }
@@ -456,6 +481,13 @@ int main() {
     int proccesed_images = 0;
     int correct_detections = 0;
 
+    int class_procced[7];
+    int class_correct[7];
+    for (int i = 0; i < 7; i++) {
+        class_correct[i] = 0;
+        class_procced[i] = 0;
+    }
+
     for (int image_choice = 0; image_choice < file_count; image_choice++) {
             char input_path[512];
         sprintf(input_path, "pictures/tests/%s", filenames[image_choice]);
@@ -489,8 +521,10 @@ int main() {
         } else if (strstr(name, "triangle")) {
             correct_shape = 6;
         }
+        class_procced[correct_shape]++;
         if (detected_shape == correct_shape) {
             correct_detections++;
+            class_correct[detected_shape]++;
         } else {
             printf("res: %d, %s\n", detected_shape, filenames[image_choice]);
         }
@@ -500,7 +534,15 @@ int main() {
     printf("Processed %d images.\n", proccesed_images);
     printf("Correct Detections: %d\n", correct_detections);
     double accuracy = (double)correct_detections / proccesed_images * 100;
-    printf("✅ Accuracy: %.2f%%\n", accuracy);
+    printf("Accuracy for each shape:\n");
+    printf(">> Circle : %.2f%%\n", (double)class_correct[1] / class_procced[1] * 100);
+    printf(">> Ellipse : %.2f%%\n", (double)class_correct[2] / class_procced[2] * 100);
+    printf(">> Square : %.2f%%\n", (double)class_correct[3] / class_procced[3] * 100);
+    printf(">> Rectangle : %.2f%%\n", (double)class_correct[4] / class_procced[4] * 100);
+    printf(">> Rhombus : %.2f%%\n", (double)class_correct[5] / class_procced[5] * 100);
+    printf(">> Triangle : %.2f%%\n", (double)class_correct[6] / class_procced[6] * 100);
+
+    printf("✅ Total accuracy: %.2f%%\n", accuracy);
 
     return 0;
 }

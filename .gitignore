@@ -12,3 +12,5 @@ pattern-detection/shape_op
 number_detection/accuracy
 number_detection/detector
 test.asm
+pattern-detection/accuracy
+pattern-detection/shape_detection_optimized

@@ -1,7 +1,7 @@
 section .rodata ; read-only data
     align 32
     const_255 dd 255.0
-    const_thershold dd 50.0
+    const_thershold dd 60.0
 
 section .text
     global apply_convolution_avx
